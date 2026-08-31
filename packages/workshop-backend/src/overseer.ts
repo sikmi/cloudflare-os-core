@@ -2195,8 +2195,8 @@ class OverseerImpl implements AgentHooks {
   bindWorkpiece(gadgetId: WorkpieceId, name: string, target: WorkpieceId,
                 chatId?: number): void {
     validateBindingName(name);
-    if (name === "GADGET") {
-      throw new Error("The binding name `GADGET` is reserved.");
+    if (name === "GADGET" || name === "AI") {
+      throw new Error(`The binding name \`${name}\` is reserved.`);
     }
     let gadget = this.getGadgetRecord(gadgetId);
     let existing = gadget.bindings[name];
@@ -2247,8 +2247,8 @@ class OverseerImpl implements AgentHooks {
     }
     if (oldName === newName) return;
     validateBindingName(newName);
-    if (newName === "GADGET") {
-      throw new Error("The binding name `GADGET` is reserved.");
+    if (newName === "GADGET" || newName === "AI") {
+      throw new Error(`The binding name \`${newName}\` is reserved.`);
     }
     if (gadget.bindings[newName]) {
       throw new Error(`There is already a binding named "${newName}".`);
@@ -2726,18 +2726,19 @@ class OverseerImpl implements AgentHooks {
   }
 
   // Build the flat `env` handed to a gadget's dynamically-loaded worker: the gadget's named
-  // bindings plus `GADGET` (the gadget's self-stub, kept for back-compat with existing gadget
-  // code). `forChatId` scopes visibility of provisional binding edges: an edge pending in that
-  // chat is included (the chat's own preview/test runs see its proposed additions), while edges
-  // pending in other chats -- or in any chat, when loading mainline -- are treated as
-  // nonexistent.
+  // bindings plus the built-in `AI` Workers AI facade and `GADGET` self-stub (kept for back-compat
+  // with existing gadget code). `forChatId` scopes visibility of provisional binding edges: an
+  // edge pending in that chat is included (the chat's own preview/test runs see its proposed
+  // additions), while edges pending in other chats -- or in any chat, when loading mainline -- are
+  // treated as nonexistent.
   getEnvForLoader(gadgetId: WorkpieceId, caller: GatekeeperCaller, forChatId?: number): object {
     let env: Record<string, any> = {}
     let gadget = this.getGadgetRecord(gadgetId);
-    env.GADGET = this.makeBindingLoopback({type: "gadget", id: gadgetId}, caller);
     for (let [name, edge] of this.visibleBindings(gadget, forChatId)) {
       env[name] = this.makeBindingLoopback({type: "gatekeeper", id: edge.target}, caller);
     }
+    env.AI = this.ctx.exports.GadgetAiBinding({});
+    env.GADGET = this.makeBindingLoopback({type: "gadget", id: gadgetId}, caller);
     return env;
   }
 

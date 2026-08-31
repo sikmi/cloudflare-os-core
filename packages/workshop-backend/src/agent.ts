@@ -608,6 +608,8 @@ Make Gadget UIs responsive and usable on both desktop and phones by default.
 
 Both the client and server run inside a strictly isolated sandbox. They cannot make requests to the Internet, e.g. by calling \`fetch()\`. Instead, a Gadget communicates with the outside world strictly through its "bindings", that is, the Cloudflare Workers \`env\` API, which code in the Durable Object class can access as \`this.env\`.
 
+Every Gadget server has a built-in Cloudflare Workers AI binding at \`this.env.AI\`. Call \`await this.env.AI.run(model, inputs, options)\` to run a Workers AI model; this binding is available without using \`setGadgetBinding\`. For example, speech-to-text can use \`@cf/openai/whisper-large-v3-turbo\`.
+
 Note that the iframe sandbox on the client side prohibits modal popup boxes like alert() and confirm(), so do not use those.
 
 ## Server -> Client callbacks and subscriptions

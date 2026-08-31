@@ -93,6 +93,17 @@ function liveRows(impl: any, chatId: number): any[] {
   return impl.listLiveChatChanges(chatId, meta.codeBase?.generation ?? 0);
 }
 
+describe("Gadget loader environment", () => {
+  it("includes the built-in Workers AI binding", () => withImpl(async impl => {
+    addGadget(impl, 1, "APP");
+
+    let gadgetEnv = impl.getEnvForLoader(
+        1, { from: "gadget", gadgetId: 1, chatId: 1 });
+
+    expect(Object.keys(gadgetEnv)).toEqual(["AI", "GADGET"]);
+  }));
+});
+
 describe("submitCodeChange", () => {
   it("establishes a pin, appends rows, and materialization stamps the declaration and watermark",
       () => withImpl(async impl => {
