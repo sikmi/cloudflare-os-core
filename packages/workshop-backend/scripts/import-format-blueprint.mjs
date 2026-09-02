@@ -192,10 +192,8 @@ const metadata = {
   bindings: incoming.metadata.bindings ?? {},
 };
 
-// `output` is declared in the sidecar and `screenshot` refers to bytes stored outside the archive,
-// so neither belongs in a bundled copy: one would be a second source of truth that silently loses,
-// the other a dangling reference.
-const dropped = ["output", "screenshot"].filter((key) => key in incoming.metadata);
+// `output` はsidecarを正とし、暗黙に不一致となる二重管理をbundled copyへ持ち込まない。
+const dropped = ["output"].filter((key) => key in incoming.metadata);
 
 const archiveBytes = serializeArchive(metadata, incoming.content);
 

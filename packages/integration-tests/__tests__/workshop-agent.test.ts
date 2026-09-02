@@ -52,7 +52,19 @@ const model = scriptedChatCompletions([
       id: "read-test-value",
       name: "executeCode",
       arguments: {
-        code: "export default async function(self, env) { console.log(await env.TEST_AMBIENT.readValue()); }",
+        code: [
+          "export default async function(self, env) {",
+          '  console.log("declared:" + (await env.TEST_AMBIENT.readValue()));',
+          '  console.log("env:" + JSON.stringify(Object.keys(env).sort()));',
+          '  console.log("undeclared:" + String(env.UNDECLARED === undefined));',
+          "  try {",
+          '    await fetch("https://undeclared-capability.invalid/");',
+          '    console.log("outbound:available");',
+          "  } catch {",
+          '    console.log("outbound:blocked");',
+          "  }",
+          "}",
+        ].join("\n"),
       },
     },
   },
@@ -74,7 +86,7 @@ afterAll(async () => {
   }
 });
 
-it("runs a scripted agent tool call through an ambient gatekeeper", async () => {
+it("limits executeCode to declared bindings with no outbound fallback", async () => {
   using publicApi = connect(harness.url);
   const [username] = nextUsernames("agent");
   if (username === undefined) throw new Error("Failed to allocate an agent-test username");
@@ -139,14 +151,19 @@ it("runs a scripted agent tool call through an ambient gatekeeper", async () => 
   expect(secondRequest.messages).toContainEqual(expect.objectContaining({
     role: "tool",
     tool_call_id: "read-test-value",
-    content: expect.stringContaining("42"),
+    content: expect.stringMatching(
+        /declared:42[\s\S]*env:\["TEST_AMBIENT"\][\s\S]*undeclared:true[\s\S]*outbound:blocked/),
   }));
   expect(history.messages).toEqual(expect.arrayContaining([
     expect.objectContaining({
       type: "message",
       author: expect.objectContaining({ type: "agent" }),
       toolCalls: expect.arrayContaining([
-        expect.objectContaining({ toolName: "executeCode", output: expect.stringContaining("42") }),
+        expect.objectContaining({
+          toolName: "executeCode",
+          output: expect.stringMatching(
+              /declared:42[\s\S]*env:\["TEST_AMBIENT"\][\s\S]*undeclared:true[\s\S]*outbound:blocked/),
+        }),
       ]),
     }),
     expect.objectContaining({

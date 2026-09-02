@@ -36,6 +36,10 @@ const SUPPORTED_RESOURCES: SupportedResource[] = [{
   urlPattern: `https://${VENDOR_HOST}/things/*`,
   title: "Test Thing",
   description: "A resource that exists only so tests can bind something.",
+}, {
+  urlPattern: `https://${VENDOR_HOST}/other/*`,
+  title: "Other Test Resource",
+  description: "A second resource type used to verify Blueprint capability boundaries.",
 }];
 
 const TYPES_CODE = `
@@ -235,14 +239,17 @@ export class TestAccount
     resource: SupportedResource;
   }> {
     const parsed = new URL(url);
-    if (parsed.host !== VENDOR_HOST || !parsed.pathname.startsWith("/things/")) {
+    let resource = parsed.pathname.startsWith("/things/")
+      ? SUPPORTED_RESOURCES[0]
+      : parsed.pathname.startsWith("/other/") ? SUPPORTED_RESOURCES[1] : undefined;
+    if (parsed.host !== VENDOR_HOST || !resource) {
       throw new Error(`Not a test-gatekeeper resource URL: ${url}`);
     }
     return {
       class: this.ctx.exports.TestGatekeeper({
         props: { label: this.ctx.props.label, resourceUrl: url },
       }),
-      resource: SUPPORTED_RESOURCES[0],
+      resource,
     };
   }
 

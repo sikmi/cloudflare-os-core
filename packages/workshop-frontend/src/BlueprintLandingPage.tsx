@@ -5,7 +5,7 @@ import { RpcStub } from 'capnweb'
 import { PublicApi, AuthenticatedApi, AdminApi, BlueprintPublicInfo, BlueprintBinding, BlueprintBindingAssignment, BlueprintUserSummary, AiChatAuthorInfo } from '@gadgets/workshop-shared/api'
 import { SupportedResource, VendorDescription, ResourceConfiguratorFrame } from '@gadgets/workshop-shared/gatekeeper'
 import { Button, Dialog, DropdownMenu, Select, Tooltip, useKumoToastManager } from '@cloudflare/kumo'
-import { ArrowsOutSimple, ArrowLeft, ArrowSquareOut, DotsThree, DownloadSimple, Lightning, Plus, Robot, Sparkle, Star, Trash, X } from '@phosphor-icons/react'
+import { ArrowLeft, ArrowSquareOut, DotsThree, DownloadSimple, Lightning, Plus, Robot, Sparkle, Star, Trash, X } from '@phosphor-icons/react'
 
 import { useAuth } from './useAuth'
 import LoginPage from './LoginPage'
@@ -818,12 +818,6 @@ export default function BlueprintLandingPage({ rpcStub }: Props) {
           </div>
 
           <aside className="space-y-3 lg:w-[360px] lg:justify-self-end lg:pt-1">
-            {blueprint.screenshotUrl && (
-              <BlueprintScreenshotHero
-                title={meta.title}
-                screenshotUrl={blueprint.screenshotUrl}
-              />
-            )}
             <div className="flex items-center gap-2">
               <span className="min-w-0 flex-1">
                 <button
@@ -1101,61 +1095,6 @@ export default function BlueprintLandingPage({ rpcStub }: Props) {
         </Dialog>
       </Dialog.Root>
     </div>
-  )
-}
-
-function BlueprintScreenshotHero({
-  title,
-  screenshotUrl,
-}: {
-  title: string
-  screenshotUrl: string
-}) {
-  return (
-    <Dialog.Root>
-      <Dialog.Trigger
-        render={(
-          <button
-            type="button"
-            className="themed-compact-shadow themed-card-hover-shadow group relative block w-full cursor-zoom-in overflow-hidden rounded-2xl border border-kumo-line bg-kumo-base text-left transition-[border-color,box-shadow,transform] duration-150 ease-out hover:-translate-y-px hover:border-kumo-fill active:scale-[0.995]"
-            aria-label={`Open larger screenshot of ${title}`}
-          >
-            <img
-              src={screenshotUrl}
-              alt={`Screenshot of ${title}`}
-              className="aspect-[16/9] w-full object-cover"
-            />
-            <span className="absolute right-2 top-2 grid h-7 w-7 place-items-center rounded-full border border-kumo-line bg-kumo-base/90 text-kumo-subtle opacity-0 shadow-[0_1px_2px_rgba(0,0,0,0.04)] transition-[opacity,color,background-color] duration-150 ease-out group-hover:opacity-100 group-hover:text-kumo-default">
-              <ArrowsOutSimple size={14} weight="bold" />
-            </span>
-          </button>
-        )}
-      />
-      <Dialog
-        className="responsive-dialog !z-[1200] !w-[min(1120px,calc(100vw-32px))] overflow-hidden bg-kumo-base p-0"
-        size="lg"
-      >
-        <Dialog.Title className="sr-only">Screenshot of {title}</Dialog.Title>
-        <Dialog.Close
-          render={(props) => (
-            <WorkshopIconButton
-              {...props}
-              aria-label="Close screenshot"
-              className="!absolute !right-3 !top-3 !z-10 !h-8 !w-8 rounded-full border border-kumo-line bg-kumo-base/90 text-kumo-subtle shadow-[0_1px_2px_rgba(0,0,0,0.05)] backdrop-blur-sm hover:bg-kumo-base hover:text-kumo-default"
-            >
-              <X size={18} />
-            </WorkshopIconButton>
-          )}
-        />
-        <div className="p-3 sm:p-4">
-          <img
-            src={screenshotUrl}
-            alt={`Screenshot of ${title}`}
-            className="max-h-[calc(var(--app-height)-96px)] w-full rounded-xl object-contain"
-          />
-        </div>
-      </Dialog>
-    </Dialog.Root>
   )
 }
 

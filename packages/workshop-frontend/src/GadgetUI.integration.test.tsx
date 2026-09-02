@@ -5,7 +5,7 @@ import { act, type ReactNode } from 'react'
 import { createRoot, type Root } from 'react-dom/client'
 import { newMessagePortRpcSession, RpcStub, RpcTarget } from 'capnweb'
 import { afterAll, afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
-import type { GadgetClient, UiBundle } from '@gadgets/workshop-shared/api'
+import type { ConsoleLogEvent, GadgetClient, UiBundle } from '@gadgets/workshop-shared/api'
 
 const testGlobal = globalThis as typeof globalThis & { IS_REACT_ACT_ENVIRONMENT?: boolean }
 const previousActEnvironment = testGlobal.IS_REACT_ACT_ENVIRONMENT
@@ -144,7 +144,7 @@ function deferred<T>() {
 function dispatchIframeHandshake(iframe: HTMLIFrameElement, port: MessagePort) {
   window.dispatchEvent(new MessageEvent('message', {
     data: 'handshake',
-    origin: window.location.origin,
+    origin: 'null',
     source: iframe.contentWindow,
     ports: [port],
   }))
@@ -188,16 +188,103 @@ describe('GadgetUI RPC recovery', () => {
     )
   })
 
-  it('grants the gadget iframe microphone access from the inherited origin', async () => {
-    const gadget = fakeGadget('recorder', 'navigator.mediaDevices.getUserMedia({ audio: true })')
+  it('keeps the gadget iframe opaque without popup or media permissions', async () => {
+    const gadget = fakeGadget(
+      'popup',
+      'import "data:text/javascript,globalThis.staticDependencyRan=true"',
+    )
     await act(async () => {
       root.render(<GadgetUI gadget={gadget.stub} height="100px" />)
     })
 
     await vi.waitFor(() => expect(container.querySelector('iframe')).not.toBeNull())
     const iframe = container.querySelector('iframe')!
-    expect(iframe.getAttribute('allow')).toBe('microphone')
-    expect(iframe.getAttribute('sandbox')?.split(/\s+/)).toContain('allow-same-origin')
+    const sandbox = iframe.getAttribute('sandbox')?.split(/\s+/)
+    expect(iframe.hasAttribute('allow')).toBe(false)
+    expect(sandbox).not.toContain('allow-same-origin')
+    expect(sandbox).not.toContain('allow-popups')
+    expect(sandbox).not.toContain('allow-popups-to-escape-sandbox')
+    expect(sandbox).toEqual(['allow-scripts'])
+    expect(iframe.srcdoc).toContain('event.preventDefault()%3B')
+    expect(iframe.srcdoc).toContain('External%20navigation%20is%20disabled')
+    expect(iframe.srcdoc).toContain("webrtc 'block'")
+    expect(iframe.srcdoc).toContain('RTCPeerConnection')
+
+    const encodedBootstrap = iframe.srcdoc.match(
+      /src="data:text\/javascript;charset=utf-8,([^"]+)"/,
+    )?.[1]
+    expect(encodedBootstrap).toBeDefined()
+    if (!encodedBootstrap) throw new Error('Missing Gadget bootstrap module')
+    const bootstrap = decodeURIComponent(encodedBootstrap)
+    expect(bootstrap.indexOf("lockGlobal(globalThis, 'open', blockedOpen)"))
+      .toBeLessThan(bootstrap.indexOf('await import('))
+    expect(bootstrap.indexOf('lockGlobal(Window.prototype, name, undefined)'))
+      .toBeLessThan(bootstrap.indexOf('await import('))
+    expect(bootstrap).toContain("throw new Error('Gadget browser lockdown failed.')")
+    expect(bootstrap).not.toContain('globalThis.staticDependencyRan=true')
+    expect(bootstrap).toContain('globalThis.staticDependencyRan%3Dtrue')
+  })
+
+  it('accepts handshake, console, and Escape only from the opaque gadget frame', async () => {
+    const onConsoleLog = vi.fn<(log: ConsoleLogEvent) => void>()
+    const onIframeEscape = vi.fn<() => void>()
+    const gadget = fakeGadget('secure', 'document.body.textContent = "secure"')
+    await act(async () => {
+      root.render(
+        <GadgetUI
+          gadget={gadget.stub}
+          height="100px"
+          onConsoleLog={onConsoleLog}
+          onIframeEscape={onIframeEscape}
+        />,
+      )
+    })
+
+    await vi.waitFor(() => expect(container.querySelector('iframe')).not.toBeNull())
+    const iframe = container.querySelector('iframe')!
+    const foreignIframe = document.createElement('iframe')
+    container.append(foreignIframe)
+    const foreignSource = foreignIframe.contentWindow
+
+    window.dispatchEvent(new MessageEvent('message', {
+      data: 'handshake',
+      origin: window.location.origin,
+      source: iframe.contentWindow,
+      ports: [new MessageChannel().port2],
+    }))
+    window.dispatchEvent(new MessageEvent('message', {
+      data: { type: 'console', level: 'warn', message: ['forged'] },
+      origin: 'null',
+      source: foreignSource,
+    }))
+    window.dispatchEvent(new MessageEvent('message', {
+      data: { type: 'escape' },
+      origin: 'null',
+      source: foreignSource,
+    }))
+
+    expect(gadget.connectToGadget).not.toHaveBeenCalled()
+    expect(onConsoleLog).not.toHaveBeenCalled()
+    expect(onIframeEscape).not.toHaveBeenCalled()
+
+    const child = connectIframe(iframe)
+    await expect(child.read()).resolves.toBe('secure')
+    window.dispatchEvent(new MessageEvent('message', {
+      data: { type: 'console', level: 'info', message: ['accepted'] },
+      origin: 'null',
+      source: iframe.contentWindow,
+    }))
+    window.dispatchEvent(new MessageEvent('message', {
+      data: { type: 'escape' },
+      origin: 'null',
+      source: iframe.contentWindow,
+    }))
+
+    expect(onConsoleLog).toHaveBeenCalledWith(expect.objectContaining({
+      level: 'info',
+      message: ['accepted'],
+    }))
+    expect(onIframeEscape).toHaveBeenCalledOnce()
   })
 
   it('keeps the iframe while redirecting calls to the replacement gadget client', async () => {

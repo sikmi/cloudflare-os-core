@@ -1,5 +1,5 @@
 import { RpcStub } from "capnweb";
-import { GadgetMetadataWithTimestamps, AiChatAuthorInfo, AiModelConfig, SUGGESTED_MODELS, CollaboratorRole, ConnectedAccountsSubscriber, ConnectedAccountsFilter, GatekeeperVendorFilter, GadgetMetadata, BlueprintMetadata, BlueprintLibrarySummary, BlueprintSource, BlueprintUserSummary, BLUEPRINT_SCREENSHOT_R2_PREFIX, GatekeeperVendorInfo, BlueprintOutput, OutputSummary, WorkpieceId, ListOutputsResult, AUTH_ERROR_CODES, createAuthError } from '@gadgets/workshop-shared/api';
+import { GadgetMetadataWithTimestamps, AiChatAuthorInfo, AiModelConfig, SUGGESTED_MODELS, CollaboratorRole, ConnectedAccountsSubscriber, ConnectedAccountsFilter, GatekeeperVendorFilter, GadgetMetadata, BlueprintMetadata, BlueprintLibrarySummary, BlueprintSource, BlueprintUserSummary, GatekeeperVendorInfo, BlueprintOutput, OutputSummary, WorkpieceId, ListOutputsResult, AUTH_ERROR_CODES, createAuthError } from '@gadgets/workshop-shared/api';
 import { Gatekeeper, GatekeeperUser, GatekeeperUserVerifier, GatekeeperVendor, AccountDescription, VendorDescription, GatekeeperConnectCallback, SupportedResource, ResourceConfiguratorFrame, AppUiContext, GatekeeperUiFrame } from "@gadgets/workshop-shared/gatekeeper";
 import { shouldAutoProvisionAccount, ambientGatekeeperMode } from "./provisioning-policy.js";
 import { CloudflareGatekeeperUser } from "@gadgets/workshop-shared/cloudflare-gatekeeper";
@@ -9,7 +9,9 @@ import { createWorkshopLogger } from "./observability";
 import { getAiGatewayConfig } from "./ai-gateway.js";
 import { utcDayKey, nextUtcMidnightIso, DailyQuotaResult } from "./ai-gateway-billing/limits/config.js";
 import type { AdminSettings } from "./admin-settings.js";
-import { isReservedBlueprintKey, readBlueprintKvRecord } from "./blueprint-archive.js";
+import {
+  isReservedBlueprintKey, normalizeBlueprintMetadata, readBlueprintKvRecord,
+} from "./blueprint-archive.js";
 import { filterEnabledResources, isResourceDisabled, readAdminConfig } from "./admin-config.js";
 import { buildGatekeeperVendorMap } from "./auth/auth-vendors.js";
 
@@ -1001,8 +1003,6 @@ export class UserDurableObject extends DurableObject<Cloudflare.Env> {
       for (let v = 1; v <= kvRecord.metadata.version; v++) {
         await this.env.BLUEPRINT_CONTENT.delete(`${id}/${v}`);
       }
-      await this.env.BLUEPRINT_CONTENT.delete(`${BLUEPRINT_SCREENSHOT_R2_PREFIX}${id}`);
-
       // Delete from KV.
       await this.env.BLUEPRINTS.delete(id);
     }
@@ -1082,7 +1082,7 @@ export class UserDurableObject extends DurableObject<Cloudflare.Env> {
     for (let record of this.storage.libraryBlueprints.list()) {
       result.push({
         id: record.id,
-        metadata: record.metadata,
+        metadata: normalizeBlueprintMetadata(record.metadata),
         addedAt: record.addedAt,
         uploaded: record.uploaded,
         pinned: pinnedBlueprintIds.has(record.id) || undefined,

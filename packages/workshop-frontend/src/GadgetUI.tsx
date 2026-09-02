@@ -22,7 +22,7 @@ let CAPNWEB_BUNDLE_ANNOTATED = `//# sourceURL=jsrpc.js\n${CAPNWEB_BUNDLE}`
 //
 // In any case, we'll prefix the gadget code with this prefix which imports the Cap'n Web library
 // (from a massive data URL) and sets up the RPC connection to the parent.
-let INJECTED_CODE_PREFIX = encodeURIComponent(String.raw`//# sourceURL=client.js
+let INJECTED_CODE_PREFIX = String.raw`//# sourceURL=client.js
 import { RpcTarget, RpcStub, newMessagePortRpcSession } from "data:text/javascript;charset=utf-8;base64,${btoa(CAPNWEB_BUNDLE_ANNOTATED)}";
 
 let gadget;  // RPC stub to the gadget's server-side Durable Object.
@@ -48,16 +48,29 @@ for (let level of ['debug', 'info', 'log', 'warn', 'error']) {
   };
 }
 
-// Allow user-activated target=_blank links, but block programmatic popups.
+// Gadget内のデータをURLへ埋め込んで持ち出せないよう、popupとlink navigationを止める。
 const blockedOpen = () => {
-  console.error('window.open() is disabled in Gadget UIs. Use a link with target="_blank" instead.');
+  console.error('External navigation is disabled in Gadget UIs.');
   return null;
 };
-window.open = blockedOpen;
-globalThis.open = blockedOpen;
-try {
-  Window.prototype.open = blockedOpen;
-} catch {}
+
+const lockGlobal = (target, name, value) => {
+  try {
+    Object.defineProperty(target, name, { value, writable: false, configurable: false });
+  } catch {}
+  if (target[name] !== value) {
+    throw new Error('Gadget browser lockdown failed.');
+  }
+};
+
+lockGlobal(globalThis, 'open', blockedOpen);
+lockGlobal(Window.prototype, 'open', blockedOpen);
+
+// connect-srcでは防げないWebRTC data channelも、利用者データの外部送信経路にしない。
+for (const name of ['RTCPeerConnection', 'webkitRTCPeerConnection', 'mozRTCPeerConnection']) {
+  lockGlobal(globalThis, name, undefined);
+  lockGlobal(Window.prototype, name, undefined);
+}
 
 // Forward Escape key presses to the parent frame. The sandboxed iframe captures keydown events
 // when it has focus, so the parent never sees them. The workshop UI uses Escape to exit fullscreen
@@ -73,14 +86,11 @@ window.addEventListener('click', (event) => {
     return;
   }
 
-  const anchor = event.target.closest('a[href][target]');
-  if (!anchor || anchor.target.toLowerCase() !== '_blank') {
-    return;
-  }
-
-  const rel = new Set((anchor.getAttribute('rel') || '').split(/\s+/).filter(Boolean));
-  rel.add('noopener');
-  anchor.setAttribute('rel', Array.from(rel).join(' '));
+  const anchor = event.target.closest('a[href]');
+  if (!anchor) return;
+  event.preventDefault();
+  event.stopImmediatePropagation();
+  console.error('External navigation is disabled in Gadget UIs.');
 }, true);
 
 // Capture unhandled exceptions and promise rejections.
@@ -100,17 +110,29 @@ window.addEventListener('unhandledrejection', (event) => {
   }, '*');
 });
 
-`);
+Object.defineProperty(globalThis, '__cloudflareOsGadgetRpc', {
+  value: gadget,
+  writable: false,
+  configurable: false,
+});
+if (globalThis.__cloudflareOsGadgetRpc !== gadget) {
+  throw new Error('Gadget RPC initialization failed.');
+}
+`;
 
 const createSandboxedHtml = (jsCode: string): string => {
+  // Gadget moduleのstatic dependencyもlockdown後に評価されるよう、別moduleをdynamic importする。
+  const gadgetModule = `const gadget = globalThis.__cloudflareOsGadgetRpc;\n${jsCode}`
+  const gadgetModuleUrl = `data:text/javascript;charset=utf-8,${encodeURIComponent(gadgetModule)}`
+  const bootstrap = `${INJECTED_CODE_PREFIX}\nawait import(${JSON.stringify(gadgetModuleUrl)});`
   return `<!DOCTYPE html>
 <html>
 <head>
   <meta name="viewport" content="width=device-width, initial-scale=1">
-  <meta http-equiv="Content-Security-Policy" content="default-src 'none'; frame-src 'none'; script-src data: 'unsafe-inline'; style-src data: 'unsafe-inline'; img-src data:; media-src data:; object-src 'none'; base-uri 'none'; form-action 'none'; connect-src 'none';">
+  <meta http-equiv="Content-Security-Policy" content="default-src 'none'; frame-src 'none'; script-src data: 'unsafe-inline'; style-src data: 'unsafe-inline'; img-src data:; media-src data:; object-src 'none'; base-uri 'none'; form-action 'none'; connect-src 'none'; webrtc 'block';">
 </head>
 <body>
-    <script type="module" src="data:text/javascript;charset=utf-8,${INJECTED_CODE_PREFIX}${encodeURIComponent(jsCode)}"></script>
+    <script type="module" src="data:text/javascript;charset=utf-8,${encodeURIComponent(bootstrap)}"></script>
 </body>
 </html>`.trim()
 }
@@ -328,13 +350,9 @@ function GadgetUISession({ gadget, height, reloadTrigger, isVisible = true, chat
     let cancelled = false
 
     const handleMessage = async (event: MessageEvent) => {
-      // Only handle messages from our iframe. `allow-same-origin` gives the srcDoc frame the
-      // workshop's origin so browser media APIs can identify it and prompt for microphone access.
-      // Also verify that inherited origin in case the frame somehow managed to browse away.
-      if (event.source !== iframeRef.current?.contentWindow ||
-          event.origin !== window.location.origin) {
-        return
-      }
+      // opaque origin の Gadget iframe 本体から届いたメッセージだけを扱う。
+      const frameWindow = iframeRef.current?.contentWindow
+      if (!frameWindow || event.source !== frameWindow || event.origin !== 'null') return
 
       if (event.data === 'handshake' && event.ports && event.ports[0]) {
         const port = event.ports[0]
@@ -499,8 +517,7 @@ function GadgetUISession({ gadget, height, reloadTrigger, isVisible = true, chat
           height: '100%',
           border: 'none'
         }}
-        allow="microphone"
-        sandbox="allow-scripts allow-same-origin allow-popups allow-popups-to-escape-sandbox"
+        sandbox="allow-scripts"
         title="Gadget UI"
       />
     </div>

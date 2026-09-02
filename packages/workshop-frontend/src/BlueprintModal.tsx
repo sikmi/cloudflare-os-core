@@ -1,8 +1,8 @@
-import { useCallback, useEffect, useRef, useState, type ChangeEvent } from 'react'
+import { useCallback, useEffect, useState } from 'react'
 import { Dialog, useKumoToastManager } from '@cloudflare/kumo'
-import { ArrowsClockwise, Check, Copy, ImageSquare, Pencil, Plus, Trash, Warning, X } from '@phosphor-icons/react'
+import { ArrowsClockwise, Check, Copy, Pencil, Plus, Trash, Warning, X } from '@phosphor-icons/react'
 import { RpcStub } from 'capnweb'
-import { BlueprintGadgetSummary, GadgetClient, GadgetMetadata, Overseer, BlueprintBindingAnnotation, BlueprintScreenshotUpload } from '@gadgets/workshop-shared/api'
+import { BlueprintGadgetSummary, GadgetClient, GadgetMetadata, Overseer, BlueprintBindingAnnotation } from '@gadgets/workshop-shared/api'
 import { WorkshopButton, WorkshopIconButton, WorkshopInput, WorkshopInputArea } from './components/WorkshopControls'
 import { copyToClipboard } from './clipboard'
 import {
@@ -10,56 +10,6 @@ import {
   BlueprintBindingCard,
   loadBindingCardData,
 } from './components/BlueprintBindingCard'
-
-const BLUEPRINT_SCREENSHOT_WIDTH = 1280
-const BLUEPRINT_SCREENSHOT_HEIGHT = 720
-const MAX_BLUEPRINT_SCREENSHOT_BYTES = 700 * 1024
-
-function canvasToBlob(canvas: HTMLCanvasElement, type: string, quality: number): Promise<Blob> {
-  return new Promise((resolve, reject) => {
-    canvas.toBlob(blob => {
-      if (blob) resolve(blob)
-      else reject(new Error('Failed to encode image.'))
-    }, type, quality)
-  })
-}
-
-async function compressBlueprintScreenshot(file: File): Promise<Blob> {
-  const bitmap = await createImageBitmap(file)
-  const canvas = document.createElement('canvas')
-  canvas.width = BLUEPRINT_SCREENSHOT_WIDTH
-  canvas.height = BLUEPRINT_SCREENSHOT_HEIGHT
-  const ctx = canvas.getContext('2d')
-  if (!ctx) throw new Error('Failed to get 2D canvas context')
-
-  try {
-    const targetRatio = BLUEPRINT_SCREENSHOT_WIDTH / BLUEPRINT_SCREENSHOT_HEIGHT
-    const sourceRatio = bitmap.width / bitmap.height
-    let sx = 0
-    let sy = 0
-    let sw = bitmap.width
-    let sh = bitmap.height
-
-    if (sourceRatio > targetRatio) {
-      sw = bitmap.height * targetRatio
-      sx = (bitmap.width - sw) / 2
-    } else if (sourceRatio < targetRatio) {
-      sh = bitmap.width / targetRatio
-      sy = (bitmap.height - sh) / 2
-    }
-
-    ctx.drawImage(bitmap, sx, sy, sw, sh, 0, 0, BLUEPRINT_SCREENSHOT_WIDTH, BLUEPRINT_SCREENSHOT_HEIGHT)
-
-    for (let quality = 0.86; quality >= 0.5; quality -= 0.12) {
-      const blob = await canvasToBlob(canvas, 'image/jpeg', quality)
-      if (blob.size <= MAX_BLUEPRINT_SCREENSHOT_BYTES) return blob
-    }
-
-    return canvasToBlob(canvas, 'image/jpeg', 0.42)
-  } finally {
-    bitmap.close()
-  }
-}
 
 type Props = {
   open: boolean
@@ -78,11 +28,6 @@ export default function BlueprintModal({ open, onClose, overseer, gadget, metada
   const [formMode, setFormMode] = useState<'list' | 'create' | 'edit'>('list')
   const [newTitle, setNewTitle] = useState('')
   const [newDescription, setNewDescription] = useState('')
-  const [newScreenshotBlob, setNewScreenshotBlob] = useState<Blob | null>(null)
-  const [newScreenshotUrl, setNewScreenshotUrl] = useState<string | null>(null)
-  const [clearScreenshot, setClearScreenshot] = useState(false)
-  const [processingScreenshot, setProcessingScreenshot] = useState(false)
-  const screenshotInputRef = useRef<HTMLInputElement>(null)
   const [creating, setCreating] = useState(false)
   const [createError, setCreateError] = useState<string | null>(null)
   const [editingBlueprint, setEditingBlueprint] = useState<BlueprintGadgetSummary | null>(null)
@@ -128,9 +73,6 @@ export default function BlueprintModal({ open, onClose, overseer, gadget, metada
       setFormMode('list')
       setNewTitle(metadata.title)
       setNewDescription('')
-      setNewScreenshotBlob(null)
-      setNewScreenshotUrl(null)
-      setClearScreenshot(false)
       setCreateError(null)
     }
   }, [open, loadBlueprints, metadata.title])
@@ -144,39 +86,6 @@ export default function BlueprintModal({ open, onClose, overseer, gadget, metada
       setCreateError(null)
     }
   }, [formMode, loadBindings])
-
-  useEffect(() => {
-    return () => {
-      if (newScreenshotUrl) URL.revokeObjectURL(newScreenshotUrl)
-    }
-  }, [newScreenshotUrl])
-
-  const handleScreenshotSelected = async (event: ChangeEvent<HTMLInputElement>) => {
-    const file = event.target.files?.[0]
-    event.target.value = ''
-    if (!file) return
-
-    if (!file.type.startsWith('image/')) {
-      toasts.add({ title: 'Please select an image file.', variant: 'error' })
-      return
-    }
-
-    setProcessingScreenshot(true)
-    try {
-      const blob = await compressBlueprintScreenshot(file)
-      setNewScreenshotBlob(blob)
-      setNewScreenshotUrl(prev => {
-        if (prev) URL.revokeObjectURL(prev)
-        return URL.createObjectURL(blob)
-      })
-      setClearScreenshot(false)
-    } catch (err) {
-      console.error('Failed to process blueprint screenshot:', err)
-      toasts.add({ title: 'Failed to process screenshot', variant: 'error' })
-    } finally {
-      setProcessingScreenshot(false)
-    }
-  }
 
   const updateBindingAnnotation = (bindingName: string, annotation: BlueprintBindingAnnotation) => {
     setBindings((prev) =>
@@ -193,25 +102,14 @@ export default function BlueprintModal({ open, onClose, overseer, gadget, metada
         bindings.map((b) => gadget.setBlueprintAnnotation(b.bindingName, b.annotation)),
       )
 
-      const screenshot: BlueprintScreenshotUpload | undefined = newScreenshotBlob
-        ? {
-          mimeType: 'image/jpeg',
-          content: new Uint8Array(await newScreenshotBlob.arrayBuffer()),
-        }
-        : undefined
-
       await gadget.createBlueprint(
         newTitle.trim() || undefined,
         newDescription.trim() || undefined,
-        screenshot,
       )
       toasts.add({ title: 'Blueprint created.', variant: 'success' })
       setFormMode('list')
       setNewTitle(metadata.title)
       setNewDescription('')
-      setNewScreenshotBlob(null)
-      setNewScreenshotUrl(null)
-      setClearScreenshot(false)
       await loadBlueprints()
     } catch (err: any) {
       setCreateError(err.message || 'Could not create blueprint.')
@@ -229,27 +127,14 @@ export default function BlueprintModal({ open, onClose, overseer, gadget, metada
         bindings.map((b) => gadget.setBlueprintAnnotation(b.bindingName, b.annotation)),
       )
 
-      const screenshot: BlueprintScreenshotUpload | null | undefined = clearScreenshot
-        ? null
-        : newScreenshotBlob
-          ? {
-            mimeType: 'image/jpeg',
-            content: new Uint8Array(await newScreenshotBlob.arrayBuffer()),
-          }
-          : undefined
-
       await overseer.updateBlueprint(editingBlueprint.id, {
         title: newTitle.trim() || editingBlueprint.title,
         description: newDescription.trim(),
         updateBindings: true,
-        screenshot,
       })
       toasts.add({ title: 'Blueprint updated.', variant: 'success' })
       setFormMode('list')
       setEditingBlueprint(null)
-      setNewScreenshotBlob(null)
-      setNewScreenshotUrl(null)
-      setClearScreenshot(false)
       await loadBlueprints()
     } catch (err: any) {
       setCreateError(err.message || 'Could not update blueprint.')
@@ -272,11 +157,6 @@ export default function BlueprintModal({ open, onClose, overseer, gadget, metada
     }
   }
 
-  const savedScreenshotUrl = formMode === 'edit' && editingBlueprint?.screenshotUrl && !clearScreenshot
-    ? editingBlueprint.screenshotUrl
-    : null
-  const screenshotPreviewUrl = newScreenshotUrl ?? savedScreenshotUrl
-
   return (
     <Dialog.Root open={open} onOpenChange={(o) => { if (!o) onClose() }}>
       <Dialog className="responsive-dialog !z-[1000] !flex !w-[min(640px,calc(100vw-32px))] flex-col overflow-hidden bg-kumo-base p-0 !top-[10%] !-translate-y-0" size="lg">
@@ -290,7 +170,7 @@ export default function BlueprintModal({ open, onClose, overseer, gadget, metada
                 {formMode === 'create'
                   ? 'Describe what people get when they start from this blueprint.'
                   : formMode === 'edit'
-                    ? 'Update the details, screenshot, and connection guidance for this blueprint.'
+                    ? 'Update the details and connection guidance for this blueprint.'
                     : 'Turn this gadget into a reusable starting point.'}
               </Dialog.Description>
               </div>
@@ -327,66 +207,6 @@ export default function BlueprintModal({ open, onClose, overseer, gadget, metada
                       rows={3}
                       className="w-full"
                     />
-                    <input
-                      ref={screenshotInputRef}
-                      type="file"
-                      accept="image/*"
-                      className="hidden"
-                      onChange={handleScreenshotSelected}
-                    />
-                    <div className="rounded-xl border border-kumo-line bg-kumo-base p-3">
-                      <div className="flex items-center justify-between gap-3">
-                        <div className="min-w-0">
-                          <p className="m-0 text-[13px] leading-[18px] font-medium tracking-[-0.25px] text-kumo-default">
-                            Screenshot
-                          </p>
-                          <p className="m-0 mt-0.5 text-[12px] leading-4 font-normal tracking-[-0.2px] text-kumo-subtle">
-                            Optional image shown on Explore and the blueprint detail page.
-                            {formMode === 'edit' && !newScreenshotUrl && editingBlueprint?.screenshotUrl && !clearScreenshot ? ' The current screenshot will stay unless you upload a new one.' : ''}
-                          </p>
-                        </div>
-                        <div className="flex shrink-0 items-center gap-1.5">
-                          {(newScreenshotUrl || (formMode === 'edit' && editingBlueprint?.screenshotUrl && !clearScreenshot)) && (
-                            <WorkshopButton
-                              className="!h-8"
-                              onClick={() => {
-                                setNewScreenshotBlob(null)
-                                setNewScreenshotUrl(prev => {
-                                  if (prev) URL.revokeObjectURL(prev)
-                                  return null
-                                })
-                                setClearScreenshot(true)
-                              }}
-                              disabled={processingScreenshot || creating}
-                            >
-                              Clear
-                            </WorkshopButton>
-                          )}
-                          <WorkshopButton
-                            className="!h-8"
-                            onClick={() => screenshotInputRef.current?.click()}
-                            disabled={processingScreenshot || creating}
-                          >
-                            <ImageSquare size={13} weight="bold" />
-                            {processingScreenshot ? 'Processing...' : newScreenshotUrl || (formMode === 'edit' && editingBlueprint?.screenshotUrl && !clearScreenshot) ? 'Change' : 'Upload'}
-                          </WorkshopButton>
-                        </div>
-                      </div>
-                      {screenshotPreviewUrl && (
-                        <div className="mt-3 overflow-hidden rounded-lg border border-kumo-line bg-kumo-tint">
-                          <img
-                            src={screenshotPreviewUrl}
-                            alt="Blueprint screenshot preview"
-                            className="max-h-[320px] w-full object-contain"
-                          />
-                        </div>
-                      )}
-                      {clearScreenshot && !newScreenshotUrl && (
-                        <div className="mt-3 rounded-lg border border-dashed border-kumo-line bg-kumo-tint px-3 py-2 text-[12px] leading-4 text-kumo-subtle">
-                          Screenshot will be removed when you save.
-                        </div>
-                      )}
-                    </div>
                   </div>
 
                   {bindingsLoading ? (
@@ -440,12 +260,11 @@ export default function BlueprintModal({ open, onClose, overseer, gadget, metada
                       tone="primary"
                       className="min-w-[64px]"
                       onClick={formMode === 'create' ? createBlueprint : saveBlueprintEdits}
-                      disabled={creating || bindingsLoading || processingScreenshot}
+                      disabled={creating || bindingsLoading}
                     >
                       {creating
                         ? formMode === 'create' ? 'Creating...' : 'Saving...'
-                        : processingScreenshot ? 'Processing...'
-                          : bindingsLoading ? 'Loading...'
+                        : bindingsLoading ? 'Loading...'
                             : formMode === 'create' ? 'Create' : 'Save'}
                     </WorkshopButton>
                   </div>
@@ -458,9 +277,6 @@ export default function BlueprintModal({ open, onClose, overseer, gadget, metada
                 onClick={() => {
                   setNewTitle(metadata.title)
                   setNewDescription('')
-                  setNewScreenshotBlob(null)
-                  setNewScreenshotUrl(null)
-                  setClearScreenshot(false)
                   setEditingBlueprint(null)
                   setFormMode('create')
                 }}
@@ -502,9 +318,6 @@ export default function BlueprintModal({ open, onClose, overseer, gadget, metada
                       onStartEdit={() => {
                         setNewTitle(bp.title)
                         setNewDescription(bp.description)
-                        setNewScreenshotBlob(null)
-                        setNewScreenshotUrl(null)
-                        setClearScreenshot(false)
                         setEditingBlueprint(bp)
                         setFormMode('edit')
                       }}

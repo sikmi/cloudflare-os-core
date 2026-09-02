@@ -8,7 +8,7 @@ import { GadgetMetadataWithTimestamps, BlueprintPublicInfo, Overseer, AiChatAuth
 import ShareModal from '../ShareModal'
 import { BindingBadge, getGradient as getBlueprintGradient, uniqueBindingBadges } from './BlueprintCard'
 import { MENU_CONTENT, MENU_ITEM, MENU_ITEM_DANGER } from './menuStyles'
-import { BlueprintPreviewImage } from './BlueprintPreviewImage'
+import { BlueprintPreview } from './BlueprintPreview'
 import DeleteConfirmationDialog from './DeleteConfirmationDialog'
 import { isImeComposing } from '../keyboardEvent'
 
@@ -499,10 +499,8 @@ function HomeFeaturedBlueprintCard({
         className="absolute inset-0 z-10 rounded-2xl focus-visible:outline focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-kumo-brand"
       />
       <div className="pointer-events-none relative z-20 flex flex-1 flex-col p-2.5">
-        <BlueprintPreviewImage
+        <BlueprintPreview
           blueprintId={blueprint.id}
-          title={blueprint.metadata.title}
-          screenshotUrl={blueprint.screenshotUrl}
           className="mb-3"
         />
         <div className="flex min-w-0 items-start gap-2 px-1 pb-1">

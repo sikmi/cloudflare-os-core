@@ -81,7 +81,6 @@ export default defineConfig(({ mode }) => {
       host: true,
       proxy: {
         '/api/client-errors': `http://${backendHost}`,
-        '/blueprint-screenshot': `http://${backendHost}`,
         '/api/site-logo': `http://${backendHost}`,
       },
     },

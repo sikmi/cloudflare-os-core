@@ -1,6 +1,9 @@
 import { describe, expect, it } from "vitest";
 import * as Y from "yjs";
-import { parseBlueprintArchive, parseBlueprintKvRecord, sanitizeBlueprintOutput } from "../src/blueprint-archive.js";
+import {
+  buildBlueprintArchiveStream, parseBlueprintArchive, parseBlueprintKvRecord,
+  sanitizeBlueprintOutput, serializeFeaturedBlueprints,
+} from "../src/blueprint-archive.js";
 import { formatBlueprintsManifestVersion, installFormatBlueprints } from "../src/format-blueprints.js";
 import { FORMAT_BLUEPRINTS } from "../src/generated/format-blueprints.js";
 
@@ -46,6 +49,159 @@ function makeEnv() {
     } as unknown as Pick<Cloudflare.Env, "BLUEPRINTS" | "BLUEPRINT_CONTENT">,
   };
 }
+
+describe("blueprint metadata boundary", () => {
+  const privateSentinel = "private-value-must-not-be-shared";
+
+  function boundaryRecord() {
+    return {
+      metadata: {
+        title: "People viewer",
+        description: "A table",
+        author: {type: "user", id: "author", name: "Author", token: privateSentinel},
+        created: new Date(0),
+        version: 1,
+        lastUpdated: new Date(0),
+        output: {
+          id: "table",
+          noun: "Table",
+          plural: "Tables",
+          icon: "table",
+          privateState: privateSentinel,
+        },
+        bindings: {
+          PEOPLE: {
+            title: "People",
+            description: "Directory",
+            type: "gatekeeper",
+            gatekeeperName: "sikmi-corp",
+            typeUrlPattern: "https://corp.example/people/*",
+            resourceUrl: "https://corp.example/people/directory",
+            included: false,
+            token: privateSentinel,
+          },
+          MODEL: {
+            title: "Model",
+            description: "Assistant model",
+            type: "aiModel",
+            suggestedModel: {
+              provider: "workers-ai",
+              modelName: "model",
+              token: privateSentinel,
+            },
+          },
+          SPAWNER: {
+            title: "Spawner",
+            description: "Starts an agent",
+            type: "agentSpawner",
+            suggestedModel: {
+              provider: "workers-ai",
+              modelName: "model",
+              privateState: privateSentinel,
+            },
+            env: {
+              PEOPLE: {type: "binding", name: "PEOPLE", token: privateSentinel},
+              GADGET: {type: "gadget", privateState: privateSentinel},
+            },
+          },
+        },
+        privateState: privateSentinel,
+      },
+      ownerId: "owner",
+      gadgetId: "gadget",
+      token: privateSentinel,
+    };
+  }
+
+  it("deeply copies only the shared metadata allowlist", () => {
+    let record = parseBlueprintKvRecord(JSON.stringify(boundaryRecord()));
+
+    expect(record).toEqual({
+      metadata: {
+        title: "People viewer",
+        description: "A table",
+        author: {type: "user", id: "author", name: "Author"},
+        created: new Date(0),
+        version: 1,
+        lastUpdated: new Date(0),
+        output: {id: "table", noun: "Table", plural: "Tables", icon: "table"},
+        bindings: {
+          PEOPLE: {
+            title: "People",
+            description: "Directory",
+            type: "gatekeeper",
+            gatekeeperName: "sikmi-corp",
+            typeUrlPattern: "https://corp.example/people/*",
+            resourceUrl: "https://corp.example/people/directory",
+          },
+          MODEL: {
+            title: "Model",
+            description: "Assistant model",
+            type: "aiModel",
+            suggestedModel: {provider: "workers-ai", modelName: "model"},
+          },
+          SPAWNER: {
+            title: "Spawner",
+            description: "Starts an agent",
+            type: "agentSpawner",
+            suggestedModel: {provider: "workers-ai", modelName: "model"},
+            env: {
+              PEOPLE: {type: "binding", name: "PEOPLE"},
+              GADGET: {type: "gadget"},
+            },
+          },
+        },
+      },
+      ownerId: "owner",
+      gadgetId: "gadget",
+    });
+    expect(JSON.stringify(record)).not.toContain(privateSentinel);
+    expect(JSON.stringify(record)).not.toContain('"included"');
+
+    let featured = serializeFeaturedBlueprints([{
+      id: "people-viewer",
+      metadata: boundaryRecord().metadata as never,
+    }]);
+    expect(featured).not.toContain(privateSentinel);
+    expect(featured).not.toContain('"included"');
+  });
+
+  it("removes private nested fields before encoding a download archive", async () => {
+    let rawMetadata = boundaryRecord().metadata;
+    let archive = buildBlueprintArchiveStream(
+      rawMetadata as never,
+      new Response(new Uint8Array()).body!,
+      0,
+    );
+    let bytes = new Uint8Array(await new Response(archive).arrayBuffer());
+    let metadataLength = new DataView(bytes.buffer, bytes.byteOffset, bytes.byteLength).getUint32(12);
+    let encodedMetadata = new TextDecoder().decode(bytes.subarray(24, 24 + metadataLength));
+
+    expect(encodedMetadata).not.toContain(privateSentinel);
+    expect(encodedMetadata).not.toContain('"included"');
+    expect(JSON.parse(encodedMetadata)).toEqual(
+      JSON.parse(JSON.stringify(parseBlueprintKvRecord(JSON.stringify(boundaryRecord())).metadata))
+    );
+  });
+
+  it("rejects missing fields and invalid union discriminators", () => {
+    let record = boundaryRecord();
+    expect(() => parseBlueprintKvRecord(JSON.stringify({
+      ...record,
+      metadata: {...record.metadata, author: {id: "author", name: "Author"}},
+    }))).toThrow("Blueprint metadata.author.type is invalid.");
+
+    expect(() => parseBlueprintKvRecord(JSON.stringify({
+      ...record,
+      metadata: {
+        ...record.metadata,
+        bindings: {
+          INVALID: {title: "Invalid", description: "", type: "http"},
+        },
+      },
+    }))).toThrow("Blueprint metadata.bindings.INVALID.type is invalid.");
+  });
+});
 
 describe("bundled format blueprints", () => {
   it("installs every manifest entry as an ordinary blueprint", async () => {

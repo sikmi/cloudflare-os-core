@@ -2115,7 +2115,6 @@ export interface Overseer extends RpcTarget {
     description?: string;
     updateCode?: boolean;
     updateBindings?: boolean;
-    screenshot?: BlueprintScreenshotUpload | null;
   }): Promise<void>;
 
   /** Delete a blueprint. Cleans up KV, R2, User DO, and local storage. */
@@ -3597,9 +3596,6 @@ export type GatekeeperCreationSpec = {
  * gatekeeper itself: two gadgets binding the same gatekeeper can annotate it differently for
  * their respective blueprints. Optional: when absent, the binding is included in the blueprint
  * with a generated title, empty description, and no resource suggestion.
- *
- * Legacy field `included` may still be present on records written by older versions of
- * the workshop. The backend still honors `included: false`, but new writes omit it.
  */
 export type BlueprintBindingAnnotation = {
   title: string;           // friendly name shown to people using the blueprint
@@ -3692,19 +3688,6 @@ export type BlueprintBinding = {
   env: Record<string, SpawnerEnvTarget>;
 });
 
-export type BlueprintScreenshotUpload = {
-  mimeType: "image/jpeg" | "image/png";
-  content: Uint8Array;
-};
-
-export const BLUEPRINT_SCREENSHOT_R2_PREFIX = 'screenshots/';
-export const BLUEPRINT_SCREENSHOT_PATH_PREFIX = '/blueprint-screenshot/';
-
-export function blueprintScreenshotUrl(id: string, metadata: { screenshot?: true, lastUpdated: Date }): string | undefined {
-  return metadata.screenshot ?
-      `${BLUEPRINT_SCREENSHOT_PATH_PREFIX}${id}?v=${metadata.lastUpdated.valueOf()}` : undefined;
-}
-
 /**
  * General metadata about a blueprint. Stored (in slightly different wrapper records) in
  * three locations: Gadget DO, User DO, and KV.
@@ -3717,12 +3700,6 @@ export type BlueprintMetadata = {
 
   version: number;       // increments every time the blueprint is updated
   lastUpdated: Date;
-
-  /**
-   * If present, a screenshot is stored separately from the metadata. The server uses this
-   * to decide when to include a derived screenshotUrl.
-   */
-  screenshot?: true;
 
   /**
    * What instantiating this blueprint produces. Absent means a generic app. Inherited by gadgets
@@ -3738,9 +3715,6 @@ export type BlueprintMetadata = {
 export type BlueprintPublicInfo = {
   id: string;
   metadata: BlueprintMetadata;
-
-  /** If present, browser-loadable URL for the public screenshot. */
-  screenshotUrl?: string;
 };
 
 /** Gadget-side summary (returned by Overseer.listBlueprints). */
@@ -3750,7 +3724,6 @@ export type BlueprintGadgetSummary = {
   description: string;
   version: number;
   codeVersionDate: Date;  // timestamp of the exported code version
-  screenshotUrl?: string;
   dirty?: boolean;        // true if last publish failed and needs retry
 };
 
@@ -3962,7 +3935,7 @@ export interface GadgetClient extends WorkpieceClient {
    * to User DO + KV + R2. Maintenance of existing blueprints stays on Overseer (see
    * Overseer.updateBlueprint() etc.).
    */
-  createBlueprint(title?: string, description?: string, screenshot?: BlueprintScreenshotUpload): Promise<BlueprintGadgetSummary>;
+  createBlueprint(title?: string, description?: string): Promise<BlueprintGadgetSummary>;
 }
 
 /**

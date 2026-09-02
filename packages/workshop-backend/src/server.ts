@@ -1,7 +1,7 @@
 import { RpcStub, RpcTarget, newHttpBatchRpcResponse, newWebSocketRpcSession, RpcSessionOptions } from "capnweb";
 import { validateRpc } from "capnweb-validate";
 import type { JWTPayload } from "jose";
-import { PublicApi, AuthenticatedApi, Overseer, GadgetMetadataWithTimestamps, AiChatAuthorInfo, AiModelConfig, AiGatewayInfo, AiModelProvider, ConnectedAccountsSubscriber, ConnectedAccountsFilter, GatekeeperVendorFilter, ObserverConfigCallback, BlueprintLibrarySummary, BlueprintPublicInfo, BlueprintUserSummary, BlueprintBindingAssignment, AgentSpawnerConfig, WorkpieceId, BLUEPRINT_SCREENSHOT_PATH_PREFIX, BLUEPRINT_SCREENSHOT_R2_PREFIX, blueprintScreenshotUrl, ServerConfig, CloudflareUsageInfo, CloudflareAccountOption, LoginAttempt, GatekeeperAppInfo, AdminApi, GatekeeperVendorInfo, OutputFormatOffer, ListOutputsResult, createOpenGadgetError, getOpenGadgetErrorCode, OPEN_GADGET_ERROR_CODES, AUTH_ERROR_CODES, createAuthError } from '@gadgets/workshop-shared/api';
+import { PublicApi, AuthenticatedApi, Overseer, GadgetMetadataWithTimestamps, AiChatAuthorInfo, AiModelConfig, AiGatewayInfo, AiModelProvider, ConnectedAccountsSubscriber, ConnectedAccountsFilter, GatekeeperVendorFilter, ObserverConfigCallback, BlueprintLibrarySummary, BlueprintPublicInfo, BlueprintUserSummary, BlueprintBindingAssignment, AgentSpawnerConfig, WorkpieceId, ServerConfig, CloudflareUsageInfo, CloudflareAccountOption, LoginAttempt, GatekeeperAppInfo, AdminApi, GatekeeperVendorInfo, OutputFormatOffer, ListOutputsResult, createOpenGadgetError, getOpenGadgetErrorCode, OPEN_GADGET_ERROR_CODES, AUTH_ERROR_CODES, createAuthError } from '@gadgets/workshop-shared/api';
 import type { UiFeatureFlags } from "@gadgets/workshop-shared/feature-flags";
 import { getServerConfig } from "./deployment-config.js";
 import { isPasswordAuthEnabled, getAuthGatekeeperAllowlist } from "./auth/config.js";
@@ -38,11 +38,7 @@ const logger = createWorkshopLogger("workshop.server");
 let formatBlueprintInstallStarted = false;
 
 function publicBlueprintInfo(id: string, metadata: BlueprintPublicInfo['metadata']): BlueprintPublicInfo {
-  return {
-    id,
-    metadata,
-    screenshotUrl: blueprintScreenshotUrl(id, metadata),
-  };
+  return {id, metadata};
 }
 
 // Re-export entrypoint types from ai-models.ts.
@@ -397,7 +393,6 @@ class AuthenticatedApiImpl extends RpcTarget implements AuthenticatedApi {
 
   async importBlueprint(archive: ReadableStream<Uint8Array>): Promise<string> {
     let { metadata, contentLength, content } = await parseBlueprintArchive(archive);
-    delete metadata.screenshot;
     let blueprintId = randomBlueprintId();
     let r2Key = `${blueprintId}/${metadata.version}`;
 
@@ -442,28 +437,63 @@ class AuthenticatedApiImpl extends RpcTarget implements AuthenticatedApi {
     let kvRecord = await readBlueprintKvRecord(this.env, blueprintId);
     if (!kvRecord) throw new Error("Blueprint not found.");
 
-    // 2. Read gzip-compressed Yjs doc from R2 and decompress.
+    // 2. install固有のworkspace stateを作る前に、assignment全体を検証する。
+    let blueprintBindings = new Map(Object.entries(kvRecord.metadata.bindings));
+    for (let bindingName of blueprintBindings.keys()) {
+      if (!Object.hasOwn(bindings, bindingName)) {
+        throw new Error(`Missing binding assignment: ${bindingName}`);
+      }
+    }
+
+    let bindingAssignments = Object.entries(bindings);
+    for (let [bindingName, assignment] of bindingAssignments) {
+      let blueprintBinding = blueprintBindings.get(bindingName);
+      if (!blueprintBinding) {
+        throw new Error(`Unknown binding name: ${bindingName}`);
+      }
+      if (assignment.type !== blueprintBinding.type) {
+        throw new Error(`Binding "${bindingName}" type mismatch.`);
+      }
+    }
+
+    // account IDはinstallする利用者のUser DO内だけで有効。選択されたaccountとresourceを
+    // Blueprintが宣言したvendor・resource種別に照合し、差し替えと失敗時のworkspace作成を防ぐ。
+    let clientUser = this.#user;
+    await Promise.all(bindingAssignments.map(async ([bindingName, assignment]) => {
+      if (assignment.type !== "gatekeeper") return;
+      let blueprintBinding = blueprintBindings.get(bindingName)!;
+      if (blueprintBinding.type !== "gatekeeper") {
+        throw new Error(`Binding "${bindingName}" type mismatch.`);
+      }
+      using selected = await clientUser.getGatekeeperClassFor(
+          assignment.accountId, assignment.resourceUrl);
+      if (selected.vendorId !== blueprintBinding.gatekeeperName) {
+        throw new Error("Invalid account selection for this service.");
+      }
+      if (selected.typeUrlPattern !== blueprintBinding.typeUrlPattern) {
+        throw new Error(`Invalid resource selection for binding "${bindingName}".`);
+      }
+    }));
+
+    // 3. Read gzip-compressed Yjs doc from R2 and decompress.
     let codeBytes = await readBlueprintContent(this.env, blueprintId, kvRecord.metadata.version);
     if (!codeBytes) throw new Error("Blueprint content not found in R2.");
 
-    // 3. Create new Overseer DO (same as newGadget()).
+    // 4. Create new Overseer DO (same as newGadget()).
     let id = this.overseers.newUniqueId().toString();
     await this.#user.newGadget(id, kvRecord.metadata.title);
     let overseerResult = await this.#openGadgetInternal(id);
 
-    // 4. Initialize from blueprint code.
+    // 5. Initialize from blueprint code.
     let overseerDo = this.overseers.get(this.overseers.idFromString(id));
     await overseerDo.initializeFromBlueprint(codeBytes, kvRecord.metadata.title,
         deploymentOutputForBlueprint(await readAdminConfig(this.env), blueprintId,
             sanitizeBlueprintOutput(kvRecord.metadata.output)));
 
-    // 5. Create gatekeepers from assignments and bind them into the workspace's (only) gadget.
+    // 6. Create gatekeepers from assignments and bind them into the workspace's (only) gadget.
     let metadata = await overseerResult.getMetadata();
     using gadget = await overseerResult.getGadget(metadata.defaultGadgetId!);
 
-    // Defensively put blueprint bindings into a map (not a raw object) until we've had a chance to
-    // validate the names.
-    let blueprintBindings = new Map(Object.entries(kvRecord.metadata.bindings));
     let gadgetId = metadata.defaultGadgetId!;
 
     // Create gatekeepers in two phases: first every non-spawner binding (binding the
@@ -473,7 +503,7 @@ class AuthenticatedApiImpl extends RpcTarget implements AuthenticatedApi {
     let createdIds = new Map<string, WorkpieceId>();
     let gkPromises: Promise<void>[] = [];
 
-    for (let [bindingName, assignment] of Object.entries(bindings)) {
+    for (let [bindingName, assignment] of bindingAssignments) {
       let blueprintBinding = blueprintBindings.get(bindingName);
       if (!blueprintBinding) {
         throw new Error(`Unknown binding name: ${bindingName}`);
@@ -510,10 +540,10 @@ class AuthenticatedApiImpl extends RpcTarget implements AuthenticatedApi {
     // Phase two: agent spawners, with the full AgentSpawnerConfig reconstructed -- displayName
     // from the binding's title, modelId from the assignment, and env resolved against the
     // phase-one gatekeepers and the new gadget.
-    for (let [bindingName, assignment] of Object.entries(bindings)) {
+    for (let [bindingName, assignment] of bindingAssignments) {
       if (assignment.type !== "agentSpawner") continue;
-      let blueprintBinding = blueprintBindings.get(bindingName);
-      if (blueprintBinding?.type !== "agentSpawner") {
+      let blueprintBinding = blueprintBindings.get(bindingName)!;
+      if (blueprintBinding.type !== "agentSpawner") {
         throw new Error(`Binding "${bindingName}" type mismatch.`);
       }
 
@@ -602,23 +632,6 @@ class AuthenticatedApiImpl extends RpcTarget implements AuthenticatedApi {
     //     system doesn't know this.
     return new AdminApiImpl(this.adminSettings.getByName(""), adminUserId);
   }
-}
-
-async function serveBlueprintScreenshot(env: Env, blueprintId: string): Promise<Response> {
-  let object = await env.BLUEPRINT_CONTENT.get(`${BLUEPRINT_SCREENSHOT_R2_PREFIX}${blueprintId}`);
-  if (!object) return new Response("Not Found", {status: 404});
-
-  let contentType = object.httpMetadata?.contentType;
-  if (contentType !== "image/jpeg" && contentType !== "image/png") {
-    contentType = "image/jpeg";
-  }
-
-  return new Response(object.body, {
-    headers: {
-      "Content-Type": contentType,
-      "Cache-Control": "public, max-age=31536000, immutable",
-    },
-  });
 }
 
 // Returned by startGatekeeperLogin(). Wraps the PendingLogin DO so the client awaits the login
@@ -788,10 +801,7 @@ class PublicApiImpl extends RpcTarget implements PublicApi {
     let r2Object = await this.env.BLUEPRINT_CONTENT.get(`${id}/${kvRecord.metadata.version}`);
     if (!r2Object) throw new Error("Blueprint content not found in R2.");
 
-    let metadata = { ...kvRecord.metadata };
-    delete metadata.screenshot;
-
-    return buildBlueprintArchiveStream(metadata, r2Object.body, r2Object.size);
+    return buildBlueprintArchiveStream(kvRecord.metadata, r2Object.body, r2Object.size);
   }
 }
 
@@ -801,11 +811,6 @@ export default {
 
     if (url.pathname === SITE_LOGO_PATH) {
       return serveSiteLogo(req, env.BLUEPRINT_CONTENT);
-    }
-
-    if (url.pathname.startsWith(BLUEPRINT_SCREENSHOT_PATH_PREFIX)) {
-      let blueprintId = url.pathname.slice(BLUEPRINT_SCREENSHOT_PATH_PREFIX.length);
-      return serveBlueprintScreenshot(env, blueprintId);
     }
 
     // Sign-in via authentication gatekeepers happens entirely within each gatekeeper Worker (the

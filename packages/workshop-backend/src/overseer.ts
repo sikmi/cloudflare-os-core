@@ -1,6 +1,6 @@
 import { RpcCompatible, RpcStub, RpcTarget } from "capnweb";
 import { validateRpc } from "capnweb-validate";
-import { Overseer, GadgetMetadata, UiBundle, WorkpieceId, WorkpieceSummary, WorkpiecesSubscriber, GadgetClient, GadgetBindingInfo, GatekeeperClient, ActionState, ActionLogEntry, ActionsSubscriber, ActionHistoryFilter, ActionHistoryPage, ChatGadgetPin, ChatCodeBase, ChatGadgetPinState, CodeChangeSubmission, CommitIdentity, CommitInfo, MergeChangesResult, AiChatMetadata, AiChatMessage, AiChatHistoryPage, AiChatSubscriber, AiChatAuthorInfo, AiModelConfig, AiChatMessageBody, AgentSpawnerConfig, ConsoleLogSubscriber, ConsoleLogEvent, CapsuleSpecifier, CollaboratorInfo, CollaboratorRole, AffectedCollaborator, ShareLinkInfo, GatekeeperCreationSpec, ObserverConfigCallback, ObserverBindingNeed, ObserverBindingFailure, BlueprintBindingAnnotation, BlueprintBinding, BlueprintMetadata, BlueprintOutput, MessageFormatRef, isOutputIcon, SpawnerEnvTarget, BlueprintGadgetSummary, AiChatStreamEvent, BlueprintScreenshotUpload, BLUEPRINT_SCREENSHOT_R2_PREFIX, blueprintScreenshotUrl, ChatAttachmentUpload, ChatAttachmentHandle, ChatAttachmentRef, BoundHookInfo, PreApprovableAction, PresenceParticipant, PresenceSubscriber, SlashCommandChoice, SlashCommandRequest, validateBindingName, createOpenGadgetError, OPEN_GADGET_ERROR_CODES, resolveSiteName, actionChangeTime } from '@gadgets/workshop-shared/api';
+import { Overseer, GadgetMetadata, UiBundle, WorkpieceId, WorkpieceSummary, WorkpiecesSubscriber, GadgetClient, GadgetBindingInfo, GatekeeperClient, ActionState, ActionLogEntry, ActionsSubscriber, ActionHistoryFilter, ActionHistoryPage, ChatGadgetPin, ChatCodeBase, ChatGadgetPinState, CodeChangeSubmission, CommitIdentity, CommitInfo, MergeChangesResult, AiChatMetadata, AiChatMessage, AiChatHistoryPage, AiChatSubscriber, AiChatAuthorInfo, AiModelConfig, AiChatMessageBody, AgentSpawnerConfig, ConsoleLogSubscriber, ConsoleLogEvent, CapsuleSpecifier, CollaboratorInfo, CollaboratorRole, AffectedCollaborator, ShareLinkInfo, GatekeeperCreationSpec, ObserverConfigCallback, ObserverBindingNeed, ObserverBindingFailure, BlueprintBindingAnnotation, BlueprintBinding, BlueprintMetadata, BlueprintOutput, MessageFormatRef, isOutputIcon, SpawnerEnvTarget, BlueprintGadgetSummary, AiChatStreamEvent, ChatAttachmentUpload, ChatAttachmentHandle, ChatAttachmentRef, BoundHookInfo, PreApprovableAction, PresenceParticipant, PresenceSubscriber, SlashCommandChoice, SlashCommandRequest, validateBindingName, createOpenGadgetError, OPEN_GADGET_ERROR_CODES, resolveSiteName, actionChangeTime } from '@gadgets/workshop-shared/api';
 import { applyCodeChange, changedGadgets, codeChangeSerializedSize, composeCodeChange, diffFiles,
   transformCodeChange, validateCodeChangeContent, validateCodeChangeSchema,
   type CodeContent, type CodeChange } from "@gadgets/workshop-shared/code-change";
@@ -32,7 +32,7 @@ import { deploymentOutputForBlueprint, FormatOffer, listFormatOffers, readAdminC
 import { chatChangeStatuses, foldProposedChanges, isCompactionTurn,
   type ChangeBatch } from "./agent-compaction";
 import { ambientGatekeeperMode } from "./provisioning-policy";
-import { listFeaturedBlueprintsFromKv, readBlueprintContent, readBlueprintKvRecord, sanitizeBlueprintOutput } from "./blueprint-archive";
+import { listFeaturedBlueprintsFromKv, normalizeBlueprintMetadata, readBlueprintContent, readBlueprintKvRecord, sanitizeBlueprintOutput } from "./blueprint-archive";
 import { WebFetchEnv } from "./web-fetch";
 import { UserDurableObject, UserAiModelRecord, type UserChatContext, type WorkspaceOutputEntry } from "./user";
 import { AgentSpawnerBinding } from "./agent-spawner-binding";
@@ -255,10 +255,6 @@ type GatekeeperClass = DurableObjectClass<Gatekeeper<any>>;
 // shape to call it — same optional-method-on-a-stub pattern as user.ts's SingletonAccountStub.
 type CatalogGatekeeperFacet =
     Fetcher<Gatekeeper<any> & Required<Pick<Gatekeeper<any>, "getAgentCatalog">>>;
-
-type LegacyBlueprintBindingAnnotation = BlueprintBindingAnnotation & {
-  included?: boolean;
-};
 
 function defaultBlueprintBindingTitle(record: GatekeeperRecord, bindingName?: string): string {
   return record.resourceTitle || bindingName || "Connection";
@@ -493,17 +489,6 @@ function describeBindingKind(binding: BlueprintBinding): string {
     case "agentSpawner": return `agent spawner`;
     default: return binding satisfies never;
   }
-}
-
-const MAX_BLUEPRINT_SCREENSHOT_BYTES = 1024 * 1024;
-function validateBlueprintScreenshotUpload(screenshot: BlueprintScreenshotUpload): BlueprintScreenshotUpload {
-  if (screenshot.mimeType !== "image/jpeg" && screenshot.mimeType !== "image/png") {
-    throw new Error("Blueprint screenshot must be a JPEG or PNG image.");
-  }
-  if (screenshot.content.byteLength > MAX_BLUEPRINT_SCREENSHOT_BYTES) {
-    throw new Error("Blueprint screenshot must be under 1 MB.");
-  }
-  return screenshot;
 }
 
 const MAX_CHAT_ATTACHMENTS_PER_MESSAGE = 5;
@@ -6723,12 +6708,7 @@ class OverseerImpl implements AgentHooks {
       // also covers an ambient capsule the agent promoted to a named binding via setGadgetBinding.
       if (gk.creationSpec?.type === "ambient") continue;
 
-      // Annotation is optional. When absent, the binding is included with an empty
-      // description and no resource suggestion. Legacy records may carry an `included:
-      // false` flag; honor it for backwards compatibility, but the current UI no longer
-      // surfaces an exclusion control.
-      let annotation = edge.blueprintAnnotation as LegacyBlueprintBindingAnnotation | undefined;
-      if (annotation?.included === false) continue;
+      let annotation = edge.blueprintAnnotation;
 
       let spec = gk.creationSpec;
 
@@ -6740,7 +6720,7 @@ class OverseerImpl implements AgentHooks {
 
       // This edge is exported, so it can serve as the blueprint binding for its target in spawner
       // env references. Registered here rather than in a pass over all edges, so that a dropped
-      // edge (dangling, ambient, or legacy `included: false`) never lends its name to an env entry.
+      // edge (dangling or ambient) never lends its name to an env entry.
       if (!edgeNameByTarget.has(edge.target)) edgeNameByTarget.set(edge.target, bindingName);
 
       let base = {
@@ -6750,13 +6730,14 @@ class OverseerImpl implements AgentHooks {
       let suggestValue = annotation?.suggestValue ?? false;
 
       if (spec.type === "gatekeeper") {
+        if (!spec.typeUrlPattern) {
+          throw new Error(`Binding "${bindingName}" must be reconnected before publication.`);
+        }
         bindings[bindingName] = {
           ...base,
           type: "gatekeeper",
           gatekeeperName: spec.vendorId,
-          // Use the vendor's URL pattern, not the specific resource URL.
-          // Fall back to resourceUrl for gatekeepers created before typeUrlPattern was stored.
-          typeUrlPattern: spec.typeUrlPattern || spec.resourceUrl,
+          typeUrlPattern: spec.typeUrlPattern,
           ...(suggestValue ? {resourceUrl: spec.resourceUrl} : {}),
         };
       } else if (spec.type === "aiModel") {
@@ -6802,6 +6783,10 @@ class OverseerImpl implements AgentHooks {
         }
         let targetSpec = targetGk.creationSpec;
         if (targetSpec?.type === "gatekeeper" || targetSpec?.type === "aiModel") {
+          if (targetSpec.type === "gatekeeper" && !targetSpec.typeUrlPattern) {
+            throw new Error(
+                `Spawner resource "${envName}" must be reconnected before publication.`);
+          }
           // Synthesize a spawner-only binding, named after the spawner env name (suffixed if an
           // edge already claims it), described from the target's own creation spec.
           let synthName = envName;
@@ -6817,7 +6802,7 @@ class OverseerImpl implements AgentHooks {
                   ...synthBase,
                   type: "gatekeeper",
                   gatekeeperName: targetSpec.vendorId,
-                  typeUrlPattern: targetSpec.typeUrlPattern || targetSpec.resourceUrl,
+                  typeUrlPattern: targetSpec.typeUrlPattern,
                 }
               : {...synthBase, type: "aiModel"};
           // Register the synthesized binding so any later env entry (in this or another spawner)
@@ -6893,9 +6878,10 @@ class OverseerImpl implements AgentHooks {
   async propagateBlueprint(
       record: BlueprintGadgetRecord,
       codeSnapshot?: Uint8Array,
-      screenshot?: BlueprintScreenshotUpload | null,
   ): Promise<void> {
     if (!this.ownerId) throw new Error("Workspace not initialized.");
+
+    record.metadata = normalizeBlueprintMetadata(record.metadata);
 
     // Mark dirty.
     record.dirty = true;
@@ -6907,20 +6893,6 @@ class OverseerImpl implements AgentHooks {
         `${record.id}/${record.metadata.version}`,
         codeSnapshot
       );
-    }
-
-    if (screenshot !== undefined) {
-      if (screenshot === null) {
-        delete record.metadata.screenshot;
-        await this.env.BLUEPRINT_CONTENT.delete(`${BLUEPRINT_SCREENSHOT_R2_PREFIX}${record.id}`);
-      } else {
-        record.metadata.screenshot = true;
-        await this.env.BLUEPRINT_CONTENT.put(
-          `${BLUEPRINT_SCREENSHOT_R2_PREFIX}${record.id}`,
-          screenshot.content,
-          { httpMetadata: { contentType: screenshot.mimeType } },
-        );
-      }
     }
 
     // Propagate to User DO.
@@ -6960,8 +6932,6 @@ class OverseerImpl implements AgentHooks {
     for (let v = 1; v <= record.metadata.version; v++) {
       await this.env.BLUEPRINT_CONTENT.delete(`${record.id}/${v}`);
     }
-    await this.env.BLUEPRINT_CONTENT.delete(`${BLUEPRINT_SCREENSHOT_R2_PREFIX}${record.id}`);
-
     // Delete from User DO.
     let owner = this.users.get(this.users.idFromString(this.ownerId));
     await this.ctx.exports.AdminSettings.getByName("").deleteFeaturedBlueprint(record.id);
@@ -10284,7 +10254,6 @@ class OverseerClientInterface extends RpcTarget implements Overseer {
         description: record.metadata.description,
         version: record.metadata.version,
         codeVersionDate: await this.#blueprintCodeDate(record),
-        screenshotUrl: blueprintScreenshotUrl(record.id, record.metadata),
         dirty: record.dirty,
       });
     }
@@ -10310,12 +10279,12 @@ class OverseerClientInterface extends RpcTarget implements Overseer {
     description?: string;
     updateCode?: boolean;
     updateBindings?: boolean;
-    screenshot?: BlueprintScreenshotUpload | null;
   }): Promise<void> {
     let record = this.impl.storage.blueprints.get(blueprintId);
     if (!record) throw new Error("No such blueprint.");
 
-    if (options.title === undefined && options.description === undefined && !options.updateCode && !options.updateBindings && options.screenshot === undefined) {
+    if (options.title === undefined && options.description === undefined &&
+        !options.updateCode && !options.updateBindings) {
       throw new Error("At least one update option must be provided.");
     }
 
@@ -10342,13 +10311,9 @@ class OverseerClientInterface extends RpcTarget implements Overseer {
       }
     }
 
-    let screenshot = options.screenshot === undefined
-      ? undefined
-      : options.screenshot === null ? null : validateBlueprintScreenshotUpload(options.screenshot);
-
     record.metadata.lastUpdated = new Date();
 
-    await this.impl.propagateBlueprint(record, codeSnapshot, screenshot);
+    await this.impl.propagateBlueprint(record, codeSnapshot);
   }
 
   async deleteBlueprint(blueprintId: string): Promise<void> {
@@ -10774,7 +10739,6 @@ class UseOverseerInterface extends RpcTarget implements Overseer {
     description?: string;
     updateCode?: boolean;
     updateBindings?: boolean;
-    screenshot?: BlueprintScreenshotUpload | null;
   }): Promise<void> { this.#deny(); }
   async deleteBlueprint(_blueprintId: string): Promise<void> { this.#deny(); }
   async retryBlueprintPublish(_blueprintId: string): Promise<void> { this.#deny(); }
@@ -10964,8 +10928,7 @@ class GadgetClientImpl extends RpcTarget implements GadgetClient {
     this.impl.storage.gadgets.put(record);
   }
 
-  async createBlueprint(title?: string, description?: string,
-                        screenshotUpload?: BlueprintScreenshotUpload)
+  async createBlueprint(title?: string, description?: string)
       : Promise<BlueprintGadgetSummary> {
     if (!this.impl.ownerId) throw new Error("Workspace not initialized.");
 
@@ -11023,11 +10986,9 @@ class GadgetClientImpl extends RpcTarget implements GadgetClient {
       commitId,
     };
 
-    let screenshot = screenshotUpload ? validateBlueprintScreenshotUpload(screenshotUpload) : undefined;
-
     // Snapshot the committed code and propagate to User DO, KV, R2.
     let codeSnapshot = await this.impl.snapshotCode(commitId);
-    await this.impl.propagateBlueprint(record, codeSnapshot, screenshot);
+    await this.impl.propagateBlueprint(record, codeSnapshot);
 
     this.impl.recordGadgetAnalytics({
       event_name: "blueprint_created",
@@ -11045,7 +11006,6 @@ class GadgetClientImpl extends RpcTarget implements GadgetClient {
       description: metadata.description,
       version: metadata.version,
       codeVersionDate,
-      screenshotUrl: blueprintScreenshotUrl(id, metadata),
       dirty: record.dirty,
     };
   }
@@ -11128,8 +11088,7 @@ class UseGadgetClientInterface extends RpcTarget implements GadgetClient {
   }
   async setBlueprintAnnotation(_name: string, _annotation: BlueprintBindingAnnotation)
       : Promise<void> { this.#deny(); }
-  async createBlueprint(_title?: string, _description?: string,
-                        _screenshot?: BlueprintScreenshotUpload): Promise<BlueprintGadgetSummary> {
+  async createBlueprint(_title?: string, _description?: string): Promise<BlueprintGadgetSummary> {
     this.#deny();
   }
 }

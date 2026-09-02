@@ -4,7 +4,10 @@
 // content byte length), followed by UTF-8 JSON metadata and the gzip-compressed Yjs snapshot.
 // See docs/blueprints.md for the full format description.
 
-import { BlueprintMetadata, BlueprintOutput, BlueprintPublicInfo, isOutputIcon } from '@gadgets/workshop-shared/api';
+import {
+  AiChatAuthorInfo, BlueprintBinding, BlueprintMetadata, BlueprintOutput, BlueprintPublicInfo,
+  SpawnerEnvTarget, isOutputIcon,
+} from '@gadgets/workshop-shared/api';
 
 export const FEATURED_BLUEPRINTS_KEY = '.featured';
 
@@ -38,10 +41,140 @@ export function isReservedBlueprintKey(id: string): boolean {
   return id === FEATURED_BLUEPRINTS_KEY || id === ADMIN_CONFIG_KEY;
 }
 
-export function reviveBlueprintMetadata(metadata: BlueprintMetadata): BlueprintMetadata {
-  metadata.created = new Date(metadata.created);
-  metadata.lastUpdated = new Date(metadata.lastUpdated);
-  return metadata;
+type UnknownRecord = Record<string, unknown>;
+
+function requireRecord(value: unknown, path: string): UnknownRecord {
+  if (value === null || typeof value !== "object" || Array.isArray(value)) {
+    throw new Error(`${path} must be an object.`);
+  }
+  return value as UnknownRecord;
+}
+
+function requireString(value: unknown, path: string): string {
+  if (typeof value !== "string") throw new Error(`${path} must be a string.`);
+  return value;
+}
+
+function requireDate(value: unknown, path: string): Date {
+  if (!(value instanceof Date) && typeof value !== "string" && typeof value !== "number") {
+    throw new Error(`${path} must be a date.`);
+  }
+  let date = new Date(value instanceof Date ? value.valueOf() : value);
+  if (Number.isNaN(date.valueOf())) throw new Error(`${path} must be a valid date.`);
+  return date;
+}
+
+function normalizeAuthor(value: unknown): AiChatAuthorInfo {
+  let author = requireRecord(value, "Blueprint metadata.author");
+  if (author.type !== "user" && author.type !== "agent" && author.type !== "gadget") {
+    throw new Error("Blueprint metadata.author.type is invalid.");
+  }
+  return {
+    type: author.type,
+    id: requireString(author.id, "Blueprint metadata.author.id"),
+    name: requireString(author.name, "Blueprint metadata.author.name"),
+  };
+}
+
+function normalizeSuggestedModel(value: unknown, path: string): {provider: string, modelName: string} {
+  let model = requireRecord(value, path);
+  return {
+    provider: requireString(model.provider, `${path}.provider`),
+    modelName: requireString(model.modelName, `${path}.modelName`),
+  };
+}
+
+function normalizeSpawnerEnvTarget(value: unknown, path: string): SpawnerEnvTarget {
+  let target = requireRecord(value, path);
+  if (target.type === "gadget") return {type: "gadget"};
+  if (target.type === "binding") {
+    return {type: "binding", name: requireString(target.name, `${path}.name`)};
+  }
+  throw new Error(`${path}.type is invalid.`);
+}
+
+function normalizeSpawnerEnv(value: unknown, path: string): Record<string, SpawnerEnvTarget> {
+  let env = requireRecord(value, path);
+  return Object.fromEntries(Object.entries(env).map(([name, target]) => [
+    name,
+    normalizeSpawnerEnvTarget(target, `${path}.${name}`),
+  ]));
+}
+
+function normalizeBlueprintBinding(value: unknown, path: string): BlueprintBinding {
+  let binding = requireRecord(value, path);
+  if (binding.spawnerOnly !== undefined && binding.spawnerOnly !== true) {
+    throw new Error(`${path}.spawnerOnly must be true when present.`);
+  }
+  let common = {
+    title: requireString(binding.title, `${path}.title`),
+    description: requireString(binding.description, `${path}.description`),
+    ...(binding.spawnerOnly === true ? {spawnerOnly: true as const} : {}),
+  };
+
+  if (binding.type === "gatekeeper") {
+    return {
+      ...common,
+      type: "gatekeeper",
+      gatekeeperName: requireString(binding.gatekeeperName, `${path}.gatekeeperName`),
+      typeUrlPattern: requireString(binding.typeUrlPattern, `${path}.typeUrlPattern`),
+      ...(binding.resourceUrl === undefined
+        ? {}
+        : {resourceUrl: requireString(binding.resourceUrl, `${path}.resourceUrl`)}),
+    };
+  }
+  if (binding.type === "aiModel") {
+    return {
+      ...common,
+      type: "aiModel",
+      ...(binding.suggestedModel === undefined
+        ? {}
+        : {suggestedModel: normalizeSuggestedModel(binding.suggestedModel, `${path}.suggestedModel`)}),
+    };
+  }
+  if (binding.type === "agentSpawner") {
+    return {
+      ...common,
+      type: "agentSpawner",
+      ...(binding.suggestedModel === undefined
+        ? {}
+        : {suggestedModel: binding.suggestedModel === null
+            ? null
+            : normalizeSuggestedModel(binding.suggestedModel, `${path}.suggestedModel`)}),
+      env: normalizeSpawnerEnv(binding.env, `${path}.env`),
+    };
+  }
+  throw new Error(`${path}.type is invalid.`);
+}
+
+function normalizeBlueprintBindings(value: unknown): Record<string, BlueprintBinding> {
+  let bindings = requireRecord(value, "Blueprint metadata.bindings");
+  return Object.fromEntries(Object.entries(bindings).map(([name, binding]) => [
+    name,
+    normalizeBlueprintBinding(binding, `Blueprint metadata.bindings.${name}`),
+  ]));
+}
+
+/** 永続化・共有境界で検証し、公開可能な既知fieldだけを深くコピーする。 */
+export function normalizeBlueprintMetadata(metadata: unknown): BlueprintMetadata {
+  let value = requireRecord(metadata, "Blueprint metadata");
+  if (!Number.isSafeInteger(value.version) || (value.version as number) < 1) {
+    throw new Error("Blueprint metadata.version must be a positive safe integer.");
+  }
+  let output = value.output === undefined ? undefined : sanitizeBlueprintOutput(value.output);
+  if (value.output !== undefined && output === undefined) {
+    throw new Error("Blueprint metadata.output is invalid.");
+  }
+  return {
+    title: requireString(value.title, "Blueprint metadata.title"),
+    description: requireString(value.description, "Blueprint metadata.description"),
+    author: normalizeAuthor(value.author),
+    created: requireDate(value.created, "Blueprint metadata.created"),
+    version: value.version as number,
+    lastUpdated: requireDate(value.lastUpdated, "Blueprint metadata.lastUpdated"),
+    ...(output === undefined ? {} : {output}),
+    bindings: normalizeBlueprintBindings(value.bindings),
+  };
 }
 
 // Longest accepted output slug/noun. Display strings shown in tabs and chips, so this keeps the
@@ -72,21 +205,35 @@ export function sanitizeBlueprintOutput(output: unknown): BlueprintOutput | unde
 }
 
 export function parseBlueprintKvRecord(raw: string): BlueprintKvRecord {
-  let kvRecord = JSON.parse(raw) as BlueprintKvRecord;
-  kvRecord.metadata = reviveBlueprintMetadata(kvRecord.metadata);
-  return kvRecord;
+  let kvRecord = requireRecord(JSON.parse(raw), "Blueprint KV record");
+  return {
+    metadata: normalizeBlueprintMetadata(kvRecord.metadata),
+    ...(kvRecord.ownerId === undefined
+      ? {}
+      : {ownerId: requireString(kvRecord.ownerId, "Blueprint KV record.ownerId")}),
+    ...(kvRecord.gadgetId === undefined
+      ? {}
+      : {gadgetId: requireString(kvRecord.gadgetId, "Blueprint KV record.gadgetId")}),
+  };
 }
 
 export function parseFeaturedBlueprints(raw: string): BlueprintPublicInfo[] {
-  let featured = JSON.parse(raw) as BlueprintPublicInfo[];
-  for (let entry of featured) {
-    entry.metadata = reviveBlueprintMetadata(entry.metadata);
-  }
-  return featured;
+  let featured = JSON.parse(raw) as unknown;
+  if (!Array.isArray(featured)) throw new Error("Featured blueprints must be an array.");
+  return featured.map((value, index) => {
+    let entry = requireRecord(value, `Featured blueprint ${index}`);
+    return {
+      id: requireString(entry.id, `Featured blueprint ${index}.id`),
+      metadata: normalizeBlueprintMetadata(entry.metadata),
+    };
+  });
 }
 
 export function serializeFeaturedBlueprints(featured: BlueprintPublicInfo[]): string {
-  return JSON.stringify(featured);
+  return JSON.stringify(featured.map((entry, index) => ({
+    id: requireString(entry.id, `Featured blueprint ${index}.id`),
+    metadata: normalizeBlueprintMetadata(entry.metadata),
+  })));
 }
 
 /**
@@ -147,7 +294,7 @@ export function randomBlueprintId(): string {
 }
 
 function encodeBlueprintArchivePrefix(metadata: BlueprintMetadata, contentLength: number): Uint8Array {
-  let metadataBytes = textEncoder.encode(JSON.stringify(metadata));
+  let metadataBytes = textEncoder.encode(JSON.stringify(normalizeBlueprintMetadata(metadata)));
   let result = new Uint8Array(BLUEPRINT_ARCHIVE_PREFIX_BYTES + metadataBytes.byteLength);
   let view = new DataView(result.buffer);
   view.setBigUint64(0, BLUEPRINT_ARCHIVE_MAGIC);
@@ -285,13 +432,13 @@ export async function parseBlueprintArchive(archive: ReadableStream<Uint8Array>)
   }
 
   let metadataBytes = await reader.readExact(metadataSize);
-  let rawMetadata: BlueprintMetadata;
+  let rawMetadata: unknown;
   try {
     rawMetadata = JSON.parse(textDecoder.decode(metadataBytes));
   } catch {
     throw new Error("Gadget archive metadata is not valid JSON.");
   }
 
-  let metadata = reviveBlueprintMetadata(rawMetadata);
+  let metadata = normalizeBlueprintMetadata(rawMetadata);
   return { metadata, contentLength, content: reader.takeTail() };
 }

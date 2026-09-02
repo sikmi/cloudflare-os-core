@@ -10,7 +10,7 @@ import { BlueprintPublicInfo } from "@gadgets/workshop-shared/api";
 import { VendorDescription } from "@gadgets/workshop-shared/gatekeeper";
 import { useAuthenticatedApi } from "./AuthContext";
 import { BindingBadge, uniqueBindingBadges } from "./components/BlueprintCard";
-import { BlueprintPreviewPlaceholder } from "./components/BlueprintPreviewImage";
+import { BlueprintPreviewPlaceholder } from "./components/BlueprintPreview";
 import ViewToggle from "./components/ViewToggle";
 
 type VendorMap = Map<string, VendorDescription>;
@@ -150,19 +150,10 @@ export default function BlueprintsPage() {
   );
 }
 
-function BlueprintThumbnail({ blueprint }: { blueprint: BlueprintPublicInfo }) {
+function BlueprintThumbnail({ id }: { id: string }) {
   return (
     <div className="relative aspect-[16/9] w-full overflow-hidden border-b border-kumo-line bg-kumo-tint">
-      {blueprint.screenshotUrl ? (
-        <img
-          src={blueprint.screenshotUrl}
-          alt={`Screenshot of ${blueprint.metadata.title}`}
-          className="h-full w-full object-cover"
-          loading="lazy"
-        />
-      ) : (
-        <BlueprintPreviewPlaceholder id={blueprint.id} />
-      )}
+      <BlueprintPreviewPlaceholder id={id} />
     </div>
   );
 }
@@ -185,7 +176,7 @@ function FeaturedBlueprintCard({
         className="absolute inset-0 z-10 focus-visible:outline focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-kumo-brand"
       />
 
-      <BlueprintThumbnail blueprint={blueprint} />
+      <BlueprintThumbnail id={blueprint.id} />
 
       <div className="flex flex-1 items-start gap-2.5 px-3 py-2.5">
         <div className="grid h-8 w-8 shrink-0 place-items-center rounded-lg bg-kumo-fill text-kumo-subtle">

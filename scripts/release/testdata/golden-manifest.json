@@ -980,8 +980,6 @@
         "run_worker_first": [
           "/api",
           "/api/*",
-          "/blueprint-screenshot",
-          "/blueprint-screenshot/*",
           "/gatekeeper/*"
         ],
         "variants": {

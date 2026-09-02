@@ -1,29 +1,16 @@
 import { Hexagon } from '@phosphor-icons/react'
 import { getGradient } from './BlueprintCard'
 
-export function BlueprintPreviewImage({
+export function BlueprintPreview({
   blueprintId,
-  title,
-  screenshotUrl,
   className,
 }: {
   blueprintId: string
-  title: string
-  screenshotUrl?: string
   className?: string
 }) {
   return (
     <div className={`overflow-hidden rounded-xl border border-kumo-line bg-kumo-tint ${className ?? ''}`}>
-      {screenshotUrl ? (
-        <img
-          src={screenshotUrl}
-          alt={`Screenshot of ${title}`}
-          className="aspect-[16/9] w-full object-cover"
-          loading="lazy"
-        />
-      ) : (
-        <BlueprintPreviewPlaceholder id={blueprintId} />
-      )}
+      <BlueprintPreviewPlaceholder id={blueprintId} />
     </div>
   )
 }

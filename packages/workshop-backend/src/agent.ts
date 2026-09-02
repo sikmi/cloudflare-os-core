@@ -611,6 +611,7 @@ Both the client and server run inside a strictly isolated sandbox. They cannot m
 Every Gadget server has a built-in Cloudflare Workers AI binding at \`this.env.AI\`. Call \`await this.env.AI.run(model, inputs, options)\` to run a Workers AI model; this binding is available without using \`setGadgetBinding\`. For example, speech-to-text can use \`@cf/openai/whisper-large-v3-turbo\`.
 
 Note that the iframe sandbox on the client side prohibits modal popup boxes like alert() and confirm(), so do not use those.
+External navigation, browser network APIs including WebRTC, and microphone access are unavailable. Use declared bindings for every external operation.
 
 ## Server -> Client callbacks and subscriptions
 

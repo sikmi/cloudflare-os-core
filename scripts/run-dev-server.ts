@@ -522,7 +522,7 @@ for (const gk of gatekeepers) {
     config.assets = {
       directory: "../workshop-frontend/dist",
       not_found_handling: "single-page-application",
-      run_worker_first: ["/api", "/api/*", "/blueprint-screenshot/*"],
+      run_worker_first: ["/api", "/api/*"],
     };
   }
 
